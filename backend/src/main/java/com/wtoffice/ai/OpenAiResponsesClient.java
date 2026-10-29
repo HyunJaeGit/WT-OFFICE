@@ -6,13 +6,17 @@ import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Map;
+import java.util.Set;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wtoffice.task.TaskRecord;
 import org.springframework.core.env.Environment;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
@@ -20,6 +24,17 @@ import org.springframework.web.client.RestClientException;
 
 @Component
 public class OpenAiResponsesClient {
+    private static final Logger logger = LoggerFactory.getLogger(OpenAiResponsesClient.class);
+    private static final Set<String> BILLING_ERROR_CODES = Set.of(
+            "insufficient_quota",
+            "billing_hard_limit_reached",
+            "credit_balance_exhausted",
+            "organization_spend_limit_exceeded",
+            "project_spend_limit_exceeded",
+            "organization_usage_limit_exceeded",
+            "organization_usage_limit_reached");
+    private static final Set<String> RATE_LIMIT_ERROR_CODES = Set.of("rate_limit_exceeded", "slow_down");
+
     private final AiSettings settings;
     private final Environment environment;
     private final ObjectMapper objectMapper;
@@ -98,26 +113,61 @@ public class OpenAiResponsesClient {
     }
 
     private AiCallException classifyHttpError(RestClientResponseException exception) {
+        JsonNode providerError = readProviderError(exception);
+        String providerType = providerError.path("type").asText("");
+        String providerCode = providerError.path("code").asText("");
+        String providerParam = providerError.path("param").asText("");
+        HttpHeaders headers = exception.getResponseHeaders();
+        String requestId = header(headers, "x-request-id");
+        String retryAfter = header(headers, "retry-after");
+
+        // Deliberately log only provider diagnostics. Never log the API key, task prompt,
+        // response body, or user supplied values.
+        logger.warn(
+                "OpenAI API returned an error: status={}, errorType={}, errorCode={}, errorParam={}, requestId={}, retryAfter={}, remainingRequests={}, remainingTokens={}",
+                exception.getStatusCode().value(), safeLogValue(providerType), safeLogValue(providerCode),
+                safeLogValue(providerParam), safeLogValue(requestId), safeLogValue(retryAfter),
+                safeLogValue(header(headers, "x-ratelimit-remaining-requests")),
+                safeLogValue(header(headers, "x-ratelimit-remaining-tokens")));
+
         return switch (exception.getStatusCode().value()) {
             case 401, 403 -> new AiCallException("AUTHENTICATION_FAILED", "OpenAI 인증에 실패했습니다.", exception);
             case 402 -> new AiCallException("BILLING_LIMIT", "OpenAI 사용 한도 또는 결제 설정을 확인해 주세요.", exception);
             case 408 -> new AiCallException("TIMEOUT", "AI 응답 시간이 초과되었습니다.", exception);
             case 429 -> {
-                String providerCode = "";
-                try {
-                    JsonNode errorBody = objectMapper.readTree(exception.getResponseBodyAsByteArray());
-                    providerCode = errorBody.path("error").path("code").asText("");
-                } catch (Exception ignored) {
-                    // Keep the response body out of logs and use the HTTP status fallback.
-                }
-                if (providerCode.equals("insufficient_quota") || providerCode.equals("billing_hard_limit_reached")) {
+                if (BILLING_ERROR_CODES.contains(providerCode) || BILLING_ERROR_CODES.contains(providerType)) {
                     yield new AiCallException("BILLING_LIMIT", "OpenAI 사용 한도 또는 결제 설정을 확인해 주세요.", exception);
                 }
-                yield new AiCallException("RATE_LIMITED", "OpenAI 요청 속도 한도에 도달했습니다.", exception);
+                if (RATE_LIMIT_ERROR_CODES.contains(providerCode) || RATE_LIMIT_ERROR_CODES.contains(providerType)
+                        || "rate_limit_error".equals(providerType)) {
+                    yield new AiCallException("RATE_LIMITED", "OpenAI 요청 속도 한도에 도달했습니다. 잠시 기다린 뒤 요청 제한을 확인해 주세요.", exception);
+                }
+                yield new AiCallException("PROVIDER_ERROR",
+                        "OpenAI가 HTTP 429로 요청을 거절했습니다. 서버 로그에서 errorCode를 확인해 주세요.", exception);
             }
             default -> new AiCallException("PROVIDER_ERROR",
                     "OpenAI 요청이 실패했습니다. HTTP " + exception.getStatusCode().value(), exception);
         };
+    }
+
+    private JsonNode readProviderError(RestClientResponseException exception) {
+        try {
+            return objectMapper.readTree(exception.getResponseBodyAsByteArray()).path("error");
+        } catch (Exception ignored) {
+            return objectMapper.createObjectNode();
+        }
+    }
+
+    private static String header(HttpHeaders headers, String name) {
+        return headers == null ? "" : headers.getFirst(name);
+    }
+
+    private static String safeLogValue(String value) {
+        if (value == null || value.isBlank()) {
+            return "-";
+        }
+        String safe = value.replaceAll("[^A-Za-z0-9_.:/-]", "_");
+        return safe.substring(0, Math.min(safe.length(), 100));
     }
 
     private String extractText(JsonNode response) {
