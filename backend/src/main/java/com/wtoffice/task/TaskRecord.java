@@ -13,5 +13,10 @@ public record TaskRecord(
         Instant startedAt,
         Instant finishedAt,
         String resultSummary,
-        String errorSummary) {
+        String errorSummary,
+        String errorCode,
+        String aiModel,
+        Integer inputTokens,
+        Integer cachedInputTokens,
+        Integer outputTokens) {
 }

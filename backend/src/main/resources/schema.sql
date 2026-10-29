@@ -9,7 +9,12 @@ CREATE TABLE IF NOT EXISTS tasks (
     started_at TEXT,
     finished_at TEXT,
     result_summary TEXT,
-    error_summary TEXT
+    error_summary TEXT,
+    error_code TEXT,
+    ai_model TEXT,
+    input_tokens INTEGER,
+    cached_input_tokens INTEGER,
+    output_tokens INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at DESC);

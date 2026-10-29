@@ -2,6 +2,7 @@ package com.wtoffice.task;
 
 import java.util.Map;
 
+import com.wtoffice.ai.AiNotConfiguredException;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -20,6 +21,17 @@ public class TaskExceptionHandler {
     @ExceptionHandler(DuplicateRequestException.class)
     public ResponseEntity<Map<String, String>> duplicateRequest(DuplicateRequestException exception) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("message", exception.getMessage()));
+    }
+
+    @ExceptionHandler(TaskConflictException.class)
+    public ResponseEntity<Map<String, String>> taskConflict(TaskConflictException exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("message", exception.getMessage()));
+    }
+
+    @ExceptionHandler(AiNotConfiguredException.class)
+    public ResponseEntity<Map<String, String>> aiNotConfigured(AiNotConfiguredException exception) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(Map.of("message", exception.getMessage()));
     }
 
     @ExceptionHandler(TaskNotFoundException.class)
@@ -64,6 +76,12 @@ class DuplicateRequestException extends RuntimeException {
 
 class TaskNotFoundException extends RuntimeException {
     TaskNotFoundException(String message) {
+        super(message);
+    }
+}
+
+class TaskConflictException extends RuntimeException {
+    TaskConflictException(String message) {
         super(message);
     }
 }

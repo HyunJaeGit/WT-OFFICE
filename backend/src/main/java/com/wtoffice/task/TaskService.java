@@ -92,7 +92,39 @@ public class TaskService {
             throw new InvalidTaskException("오류 요약은 4000자 이하여야 합니다.");
         }
 
-        repository.updateStatus(id, next, request.resultSummary(), request.errorSummary());
+        if (next == TaskStatus.RUNNING) {
+            if (!repository.claimPendingTask(id)) {
+                throw new TaskConflictException("이미 실행 중인 작업이 있거나 이 작업을 시작할 수 없습니다.");
+            }
+        } else {
+            repository.updateStatus(id, next, request.resultSummary(), request.errorSummary());
+        }
+        return get(id);
+    }
+
+    @Transactional
+    public synchronized TaskRecord startForExecution(String id) {
+        TaskRecord current = get(id);
+        if (current.status() != TaskStatus.PENDING || !repository.claimPendingTask(id)) {
+            throw new TaskConflictException("이 작업을 실행할 수 없습니다. 현재 상태를 확인해 주세요.");
+        }
+        return get(id);
+    }
+
+    @Transactional
+    public synchronized TaskRecord completeAiTask(String id, String result, String model,
+            Integer inputTokens, Integer cachedInputTokens, Integer outputTokens) {
+        requireRunning(id);
+        repository.updateStatus(id, TaskStatus.COMPLETED, result, null, null, model,
+                inputTokens, cachedInputTokens, outputTokens);
+        return get(id);
+    }
+
+    @Transactional
+    public synchronized TaskRecord failAiTask(String id, String errorCode, String errorSummary) {
+        requireRunning(id);
+        repository.updateStatus(id, TaskStatus.FAILED, null, errorSummary, errorCode,
+                null, null, null, null);
         return get(id);
     }
 
@@ -111,5 +143,11 @@ public class TaskService {
 
     private static boolean hasText(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private void requireRunning(String id) {
+        if (get(id).status() != TaskStatus.RUNNING) {
+            throw new TaskConflictException("진행 중인 작업만 완료하거나 실패로 변경할 수 있습니다.");
+        }
     }
 }

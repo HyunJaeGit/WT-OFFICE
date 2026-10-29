@@ -18,6 +18,7 @@ import org.springframework.http.ResponseEntity;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "server.address=127.0.0.1",
+        "app.ai.enabled=false",
         "spring.datasource.url=jdbc:sqlite:./target/wt-office-test.db"
 })
 class TaskApiIntegrationTest {
@@ -114,6 +115,21 @@ class TaskApiIntegrationTest {
 
         assertThat(failed.getBody().get("status")).isEqualTo("FAILED");
         assertThat(failed.getBody().get("errorSummary")).isEqualTo("테스트 오류");
+    }
+
+    @Test
+    void keepsAiDisabledAndDoesNotChangePendingTaskWhenExecutionIsNotConfigured() {
+        String id = createTask("AI 비활성 상태 확인");
+        ResponseEntity<Map<String, Object>> status = restTemplate.exchange(
+                "/api/ai/status", HttpMethod.GET, null, TASK_BODY);
+        ResponseEntity<Map<String, Object>> execute = restTemplate.exchange(
+                "/api/tasks/" + id + "/execute", HttpMethod.POST, null, TASK_BODY);
+        ResponseEntity<Map<String, Object>> detail = restTemplate.exchange(
+                "/api/tasks/" + id, HttpMethod.GET, null, TASK_BODY);
+
+        assertThat(status.getBody().get("available")).isEqualTo(false);
+        assertThat(execute.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(detail.getBody().get("status")).isEqualTo("PENDING");
     }
 
     private String createTask(String title) {
